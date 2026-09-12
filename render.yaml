@@ -1,0 +1,60 @@
+# Worksetu Two — Render Blueprint. A separate deployment from the original
+# worksetu project (different repo, different Supabase project, different
+# Render services), sharing the same architecture. Deploys both services
+# from one repo:
+#   worksetutwo-api  — Express/TypeScript backend (persistent Node process —
+#                      required: Socket.io live dispatch push, node-cron
+#                      jobs, and the dispatch engine's in-process
+#                      setTimeout/setInterval offer-timeout windows do not
+#                      survive on stateless serverless functions).
+#   worksetutwo-web  — the static frontend (index.html/app.js/api.js/
+#                      mockData.js/translations.js), staged into its own
+#                      output dir at build time so the backend's TypeScript
+#                      source, .git history, and internal docs are never
+#                      published alongside it.
+#
+# Database: a dedicated new Supabase project created for this deployment
+# (not shared with the original worksetu project). Set DATABASE_URL/
+# DIRECT_URL below to its pooled/session-pooler connection strings.
+
+services:
+  - type: web
+    name: worksetutwo-api
+    env: node
+    plan: free
+    region: singapore
+    rootDir: server
+    buildCommand: npm install && npm run prisma:generate && npm run prisma:deploy && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # new Supabase project's pooled connection string (?pgbouncer=true)
+      - key: DIRECT_URL
+        sync: false # new Supabase project's session-pooler connection string, port 5432 (NOT db.<ref>.supabase.co — IPv6-only, fails on Render)
+      - key: JWT_SECRET
+        generateValue: true
+      - key: REDIS_URL
+        sync: false # Upstash Redis connection string
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false # set to the worksetutwo-web URL below once known, e.g. https://worksetutwo-web.onrender.com
+
+  - type: web
+    name: worksetutwo-web
+    env: static
+    rootDir: .
+    buildCommand: mkdir -p dist && cp index.html app.js api.js mockData.js translations.js worksetu_logo.png dist/
+    staticPublishPath: ./dist
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

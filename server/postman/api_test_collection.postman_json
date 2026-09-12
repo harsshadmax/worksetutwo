@@ -1,0 +1,371 @@
+{
+  "info": {
+    "name": "Worksetu API Test Suite",
+    "description": "End-to-end contract tests for the Worksetu cooperative gig-service backend — customer, provider, and admin flows, native wallet only, no Razorpay",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "b7e1a2f0-4c3d-4a2e-9b1a-worksetu-api-suite"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:4000/api/v1" },
+    { "key": "customerToken", "value": "" },
+    { "key": "workerToken", "value": "" },
+    { "key": "adminToken", "value": "" },
+    { "key": "bookingId", "value": "" },
+    { "key": "dispatchLogId", "value": "" },
+    { "key": "workerProfileId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 - Customer Register",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{baseUrl}}/auth/customer/register",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fullName\": \"Deepika Ramaswamy\",\n  \"email\": \"deepika.qa@example.com\",\n  \"phone\": \"9876500001\",\n  \"password\": \"TestPass@123\",\n  \"address\": \"54, Gandhi Nagar Main Road, Adyar, Chennai\",\n  \"lat\": 13.0064,\n  \"lng\": 80.2569\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 201', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('token present', () => pm.expect(body.token).to.be.a('string'));",
+              "pm.collectionVariables.set('customerToken', body.token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Worker Register",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{baseUrl}}/auth/worker/register",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"fullName\": \"Ravi Kumar\",\n  \"email\": \"ravi.qa@example.com\",\n  \"phone\": \"9876500002\",\n  \"password\": \"TestPass@123\",\n  \"cooperativeId\": \"coop-1\",\n  \"primarySkillId\": \"plumbing\",\n  \"experienceYears\": 6,\n  \"homeLocation\": { \"lat\": 13.0012, \"lng\": 80.2565, \"address\": \"Adyar, Chennai\" },\n  \"serviceAreaRadiusKm\": 10\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 201', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('worker profile id present', () => pm.expect(body.workerProfileId).to.be.a('string'));",
+              "pm.collectionVariables.set('workerProfileId', body.workerProfileId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Worker Login",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{baseUrl}}/auth/worker/login",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"identifier\": \"ravi.qa@example.com\",\n  \"password\": \"TestPass@123\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.collectionVariables.set('workerToken', body.token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "04 - Admin Login",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{baseUrl}}/auth/admin/login",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"identifier\": \"registrar@worksetu.coop\",\n  \"password\": \"AdminPass@123\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('adminToken', pm.response.json().token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Admin Verifies Worker",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{adminToken}}" }
+        ],
+        "url": "{{baseUrl}}/admin/workers/{{workerProfileId}}/verify",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"decision\": \"APPROVED\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('verificationStatus is APPROVED', () => pm.expect(pm.response.json().verificationStatus).to.eql('APPROVED'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "06 - Worker Sets Availability AVAILABLE",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{workerToken}}" }
+        ],
+        "url": "{{baseUrl}}/workers/me/availability",
+        "body": { "mode": "raw", "raw": "{\n  \"status\": \"AVAILABLE\"\n}" }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('status is 200', () => pm.response.to.have.status(200));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "07 - Customer Creates Booking Request",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{customerToken}}" }
+        ],
+        "url": "{{baseUrl}}/bookings/request",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"serviceCategoryId\": \"plumbing\",\n  \"location\": { \"address\": \"54, Gandhi Nagar Main Road, Adyar, Chennai\", \"lat\": 13.0064, \"lng\": 80.2569 },\n  \"description\": \"Leaking kitchen tap and pipe needs replacement\",\n  \"scheduledAt\": null,\n  \"urgency\": \"URGENT\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 201', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('status is REQUESTED', () => pm.expect(body.status).to.eql('REQUESTED'));",
+              "pm.collectionVariables.set('bookingId', body.bookingId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "08 - Worker Fetches Incoming Offers",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{workerToken}}" }],
+        "url": "{{baseUrl}}/workers/me/incoming"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "if (body.length > 0) { pm.collectionVariables.set('dispatchLogId', body[0].dispatchLogId); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "09 - Worker Accepts Dispatch Offer",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{workerToken}}" }
+        ],
+        "url": "{{baseUrl}}/dispatch/{{dispatchLogId}}/respond",
+        "body": { "mode": "raw", "raw": "{\n  \"response\": \"ACCEPT\"\n}" }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('outcome is ACCEPTED', () => pm.expect(pm.response.json().outcome).to.eql('ACCEPTED'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 - Worker Starts Service",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "Authorization", "value": "Bearer {{workerToken}}" }],
+        "url": "{{baseUrl}}/bookings/{{bookingId}}/start"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('status is 200', () => pm.response.to.have.status(200));"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 - Worker Completes Service",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "Authorization", "value": "Bearer {{workerToken}}" }],
+        "url": "{{baseUrl}}/bookings/{{bookingId}}/complete"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('status is COMPLETED', () => pm.expect(pm.response.json().status).to.eql('COMPLETED'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "12 - Customer Submits 5-Star Review (Triggers Feedback Credit)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{customerToken}}" }
+        ],
+        "url": "{{baseUrl}}/bookings/{{bookingId}}/review",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"punctuality\": 5,\n  \"quality\": 5,\n  \"professionalism\": 5,\n  \"communication\": 5,\n  \"writtenFeedback\": \"Quick and professional, solved the leak in ten minutes\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('overallScore is 5', () => pm.expect(body.overallScore).to.eql(5));",
+              "pm.test('creditIssued is greater than 0', () => pm.expect(body.creditIssued).to.be.above(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "13 - Worker Checks Wallet Balance",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{workerToken}}" }],
+        "url": "{{baseUrl}}/workers/me/wallet"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('availableBalance is a number', () => pm.expect(pm.response.json().availableBalance).to.be.a('number'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "14 - Worker Redeems Wallet (Native, No Razorpay)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{workerToken}}" }
+        ],
+        "url": "{{baseUrl}}/workers/me/wallet/redeem",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 50,\n  \"payoutMethod\": \"BANK_TRANSFER_MOCK\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200 or 409', () => pm.expect([200, 409]).to.include(pm.response.code));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 - Admin Views Booking Ledger",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{adminToken}}" }],
+        "url": "{{baseUrl}}/admin/bookings/ledger?status=SETTLED&page=1"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('status is 200', () => pm.response.to.have.status(200));"]
+          }
+        }
+      ]
+    }
+  ]
+}

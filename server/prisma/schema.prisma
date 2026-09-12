@@ -1,0 +1,732 @@
+// prisma/schema.prisma
+// Worksetu — Cooperative Gig-Service Platform
+// PostgreSQL (Supabase) + PostGIS, Prisma ORM
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [postgis]
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  CUSTOMER
+  WORKER
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum VerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ProficiencyLevel {
+  BASIC
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum WorkerAvailabilityStatus {
+  AVAILABLE
+  ON_JOB
+  TRAVELLING
+  OFF_DUTY
+}
+
+enum BookingType {
+  ON_DEMAND
+  SCHEDULED
+}
+
+enum UrgencyLevel {
+  NORMAL
+  URGENT
+}
+
+enum BookingStatus {
+  REQUESTED
+  DISPATCHING_TOP3
+  DISPATCHING_POOL
+  ASSIGNED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  SETTLED
+  CANCELLED
+}
+
+enum DispatchAttempt {
+  ATTEMPT_1
+  ATTEMPT_2
+  ATTEMPT_3
+  POOL
+  ADMIN_OVERRIDE
+}
+
+enum DispatchOutcome {
+  OFFERED
+  ACCEPTED
+  DECLINED
+  TIMEOUT
+  LOCK_LOST
+}
+
+enum PaymentMethod {
+  CASH
+  DIRECT_PAY
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+enum CreditTransactionType {
+  JOB_PAYOUT
+  FEEDBACK_CREDIT
+  INCENTIVE_BONUS
+  REDEMPTION
+  ADJUSTMENT
+  REFUND
+  REVERSAL
+  /// Cooperative.dividendSharePercent applied to a worker's completed
+  /// JOB_PAYOUT earnings since their last distribution.
+  DIVIDEND_PAYOUT
+}
+
+enum SettlementStatus {
+  PENDING
+  RECORDED
+  RECONCILED
+  DISPUTED
+}
+
+enum CreditTransactionStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum PayoutMethod {
+  BANK_TRANSFER_MOCK
+  CASH_PICKUP
+}
+
+enum IncentiveStatus {
+  PENDING
+  COMPLETED
+  EXPIRED
+}
+
+enum NotificationAudience {
+  USER
+  ALL_WORKERS
+  ALL_CUSTOMERS
+  COOPERATIVE
+}
+
+enum DocumentType {
+  IDENTITY_PROOF
+  CERTIFICATION
+  COOPERATIVE_ID
+}
+
+enum ScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  SCAN_FAILED
+}
+
+// ---------------------------------------------------------------------------
+// CORE IDENTITY
+// ---------------------------------------------------------------------------
+
+model User {
+  id                  String        @id @default(uuid())
+  role                UserRole
+  fullName            String
+  email               String        @unique
+  phone               String        @unique
+  passwordHash        String
+  avatarUrl           String?
+  accountStatus       AccountStatus @default(ACTIVE)
+  emailVerifiedAt     DateTime?
+  phoneVerifiedAt     DateTime?
+  /// Incremented on password change or "log out all devices" — every access
+  /// token embeds the tokenVersion it was issued with; a mismatch at verify
+  /// time invalidates the token even though it has not expired (Section 6.3)
+  tokenVersion        Int           @default(0)
+  failedLoginAttempts Int           @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  /// Soft delete for account-deletion privacy requests (Section 17.4). A
+  /// non-null value excludes the row from all normal queries via a Prisma
+  /// middleware filter; the row itself is retained for financial/audit
+  /// integrity on any Booking/CreditTransaction it is referenced by
+  deletedAt           DateTime?
+  /// Section 17.2 — registration is refused without this being set
+  acceptedTermsAt     DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  customerProfile     CustomerProfile?
+  workerProfile       WorkerProfile?
+  adminProfile        AdminProfile?
+  preference          UserPreference?
+  notifications       Notification[]
+  auditLogs           AuditLog[]           @relation("AuditActor")
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  otpVerifications    OtpVerification[]
+  idempotencyKeys     IdempotencyKey[]
+  documents           Document[]
+
+  @@index([role])
+  @@index([accountStatus])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model UserPreference {
+  id                   String   @id @default(uuid())
+  userId               String   @unique
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  theme                String   @default("LIGHT")
+  language             String   @default("en")
+  /// Section 18.1 — subset of "IN_APP" | "EMAIL" | "SMS" | "PUSH"; IN_APP is
+  /// always effectively active regardless of this list (Section 18.1)
+  notificationChannels String[] @default(["IN_APP"])
+
+  @@map("user_preferences")
+}
+
+model CustomerProfile {
+  id             String @id @default(uuid())
+  userId         String @unique
+  user           User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  defaultAddress String
+
+  /// PostGIS Point(lng, lat), SRID 4326
+  defaultLocation Unsupported("geometry(Point, 4326)")?
+
+  bookings Booking[] @relation("CustomerBookings")
+
+  @@map("customer_profiles")
+}
+
+model AdminProfile {
+  id      String  @id @default(uuid())
+  userId  String  @unique
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title   String? // e.g. "Federation Registrar"
+  isSuper Boolean @default(false)
+
+  @@map("admin_profiles")
+}
+
+// ---------------------------------------------------------------------------
+// AUTH & SESSION (Section 6) — added in Version 2.0 production hardening
+// ---------------------------------------------------------------------------
+
+model RefreshToken {
+  id                String    @id @default(uuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 hash of the opaque refresh token — the raw token is never stored
+  tokenHash         String    @unique
+  issuedAt          DateTime  @default(now())
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  /// set when this token was consumed by a refresh-rotation call and replaced
+  replacedByTokenId String?
+  ipAddress         String?
+  userAgent         String?
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 hash of the one-time reset token — the raw token is only ever
+  /// transmitted to the user, never persisted
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model OtpVerification {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel    String // "EMAIL" | "PHONE"
+  /// bcrypt hash of the 6-digit OTP — never store the raw code
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, channel])
+  @@map("otp_verifications")
+}
+
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  /// client-supplied Idempotency-Key header value, unique per user per route
+  key          String
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  route        String
+  requestHash  String // hash of the normalized request body, to detect key reuse with a different payload
+  responseCode Int?
+  responseBody Json?
+  status       String   @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime // idempotency keys are retained 24h then eligible for cleanup
+
+  @@unique([userId, route, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+// ---------------------------------------------------------------------------
+// COOPERATIVES & WORKERS
+// ---------------------------------------------------------------------------
+
+model Cooperative {
+  id                 String   @id @default(uuid())
+  name               String
+  location           String
+  registrationNumber String   @unique
+  members            Int      @default(0)
+  founded            Int
+  /// Percentage (0-100) of each member's completed job earnings retained
+  /// by the cooperative and periodically redistributed as a dividend —
+  /// see CreditTransactionType.DIVIDEND_PAYOUT and
+  /// admin.controller.ts#distributeDividends.
+  dividendSharePercent Int      @default(10)
+  createdAt          DateTime @default(now())
+
+  workers WorkerProfile[]
+
+  @@map("cooperatives")
+}
+
+model WorkerProfile {
+  id                  String                   @id @default(uuid())
+  userId              String                   @unique
+  user                User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cooperativeId       String
+  cooperative         Cooperative              @relation(fields: [cooperativeId], references: [id])
+  experienceYears     Int                      @default(0)
+  serviceAreaRadiusKm Float                    @default(5)
+  verificationStatus  VerificationStatus       @default(PENDING)
+  rejectionReason     String?
+  approvedAt          DateTime?
+  approvedByAdminId   String?
+  availabilityStatus  WorkerAvailabilityStatus @default(OFF_DUTY)
+  ratingAverage       Float                    @default(0)
+  ratingCount         Int                      @default(0)
+  currentBookingId    String?
+  /// Section 15.1 — set by admin suspension; while non-null the worker
+  /// cannot toggle availabilityStatus back to AVAILABLE
+  suspendedAt         DateTime?
+
+  /// PostGIS Point(lng, lat), SRID 4326 — worker's registered home base
+  homeLocation Unsupported("geometry(Point, 4326)")?
+
+  /// PostGIS Point(lng, lat), SRID 4326 — most recent live GPS ping
+  currentLocation Unsupported("geometry(Point, 4326)")?
+  lastLocationAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  skills             WorkerSkill[]
+  assignedBookings   Booking[]           @relation("AssignedWorker")
+  dispatchLogs       DispatchLog[]
+  reviews            Review[]            @relation("WorkerReviews")
+  creditTransactions CreditTransaction[]
+  incentiveProgress  IncentiveProgress[]
+  feedbackCredit     FeedbackCredit?
+
+  @@index([verificationStatus])
+  @@index([availabilityStatus])
+  @@index([cooperativeId])
+  /// covers the dispatch-engine hot path: WHERE verificationStatus = APPROVED AND availabilityStatus = AVAILABLE
+  @@index([verificationStatus, availabilityStatus])
+  @@map("worker_profiles")
+}
+
+model SkillCategory {
+  id             String   @id // matches ServiceCategory.id, e.g. "plumbing"
+  translationKey String
+  createdAt      DateTime @default(now())
+
+  workerSkills WorkerSkill[]
+
+  @@map("skill_categories")
+}
+
+model WorkerSkill {
+  id                 String             @id @default(uuid())
+  workerProfileId    String
+  workerProfile      WorkerProfile      @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+  skillCategoryId    String
+  skillCategory      SkillCategory      @relation(fields: [skillCategoryId], references: [id])
+  proficiencyLevel   ProficiencyLevel   @default(BASIC)
+  verificationStatus VerificationStatus @default(PENDING)
+  isPrimary          Boolean            @default(false)
+  createdAt          DateTime           @default(now())
+
+  certifications Certification[]
+
+  @@unique([workerProfileId, skillCategoryId])
+  @@index([skillCategoryId])
+  @@index([skillCategoryId, verificationStatus])
+  @@map("worker_skills")
+}
+
+model Certification {
+  id            String      @id @default(uuid())
+  workerSkillId String
+  workerSkill   WorkerSkill @relation(fields: [workerSkillId], references: [id], onDelete: Cascade)
+  title         String
+  issuingBody   String?
+  /// Section 16.1 — a private, signed-URL-only Document row, never a raw URL
+  documentId    String
+  document      Document    @relation(fields: [documentId], references: [id])
+  issuedAt      DateTime?
+  expiresAt     DateTime?
+  verifiedAt    DateTime?
+
+  @@map("certifications")
+}
+
+/// Section 16 — private-bucket storage reference for identity and
+/// certification documents. Never holds a public or permanent URL.
+model Document {
+  id               String       @id @default(uuid())
+  ownerUserId      String
+  owner            User         @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  documentType     DocumentType
+  /// server-generated random key, e.g. documents/{uuid}.pdf — never derived
+  /// from the user-supplied filename (Section 16.3)
+  storageKey       String       @unique
+  originalFilename String
+  mimeType         String
+  sizeBytes        Int
+  scanStatus       ScanStatus   @default(PENDING)
+  uploadedAt       DateTime     @default(now())
+  expiresAt        DateTime?
+  deletedAt        DateTime?
+
+  certifications Certification[]
+
+  @@index([ownerUserId])
+  @@index([scanStatus])
+  @@map("documents")
+}
+
+// ---------------------------------------------------------------------------
+// SERVICE CATALOG
+// ---------------------------------------------------------------------------
+
+model ServiceCategory {
+  id             String   @id // "plumbing", "electrical", ...
+  translationKey String
+  baseRate       Decimal  @db.Decimal(10, 2)
+  hourlyRate     Decimal  @db.Decimal(10, 2)
+  icon           String
+  isEnabled      Boolean  @default(true)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  bookings Booking[]
+
+  @@map("service_categories")
+}
+
+// ---------------------------------------------------------------------------
+// BOOKING & DISPATCH
+// ---------------------------------------------------------------------------
+
+model Booking {
+  id                String          @id @default(uuid())
+  customerId        String
+  customer          CustomerProfile @relation("CustomerBookings", fields: [customerId], references: [id])
+  serviceCategoryId String
+  serviceCategory   ServiceCategory @relation(fields: [serviceCategoryId], references: [id])
+  type              BookingType     @default(ON_DEMAND)
+  description       String
+  address           String
+
+  /// PostGIS Point(lng, lat), SRID 4326 — job site location
+  customerLocation Unsupported("geometry(Point, 4326)")
+
+  scheduledAt    DateTime?
+  urgency        UrgencyLevel  @default(NORMAL)
+  baseCharge     Decimal       @db.Decimal(10, 2)
+  hourlyRate     Decimal       @db.Decimal(10, 2)
+  estimatedTotal Decimal       @db.Decimal(10, 2)
+  status         BookingStatus @default(REQUESTED)
+
+  assignedWorkerId String?
+  assignedWorker   WorkerProfile? @relation("AssignedWorker", fields: [assignedWorkerId], references: [id])
+
+  /// Redis-mirrored lock expiry persisted for audit/recovery — the live lock of record is Redis
+  lockExpiresAt DateTime?
+
+  /// Optimistic-concurrency guard, defense-in-depth alongside the Redis lock
+  /// (Section 11.2): every status-changing UPDATE includes WHERE version = :expected
+  /// and SET version = version + 1; a zero-row update means a concurrent writer won
+  version Int @default(0)
+
+  confirmedAt  DateTime?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  settledAt    DateTime?
+  cancelledAt  DateTime?
+  cancelReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dispatchLogs DispatchLog[]
+  invoice      Invoice?
+  review       Review?
+
+  @@index([status])
+  @@index([assignedWorkerId])
+  @@index([customerId])
+  @@index([serviceCategoryId])
+  @@map("bookings")
+}
+
+model DispatchLog {
+  id              String          @id @default(uuid())
+  bookingId       String
+  booking         Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  workerId        String
+  worker          WorkerProfile   @relation(fields: [workerId], references: [id])
+  attemptNumber   DispatchAttempt
+  distanceKm      Float
+  continuityScore Float
+  offeredAt       DateTime        @default(now())
+  respondedAt     DateTime?
+  outcome         DispatchOutcome @default(OFFERED)
+
+  @@index([bookingId])
+  @@index([workerId])
+  /// covers the timeout-sweep query in Section 11.4 (find OFFERED rows past their expiry)
+  @@index([outcome, offeredAt])
+  @@map("dispatch_logs")
+}
+
+// ---------------------------------------------------------------------------
+// PAYMENTS — NATIVE WALLET / CASH / DIRECT-PAY ONLY (NO RAZORPAY)
+// ---------------------------------------------------------------------------
+
+model Invoice {
+  id           String   @id @default(uuid())
+  bookingId    String   @unique
+  booking      Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  baseCharge   Decimal  @db.Decimal(10, 2)
+  hoursBilled  Decimal  @default(1) @db.Decimal(6, 2)
+  hourlyCharge Decimal  @db.Decimal(10, 2)
+  platformFee  Decimal  @db.Decimal(10, 2)
+  totalAmount  Decimal  @db.Decimal(10, 2)
+  createdAt    DateTime @default(now())
+
+  paymentTransaction PaymentTransaction?
+
+  @@map("invoices")
+}
+
+model PaymentTransaction {
+  id                String        @id @default(uuid())
+  invoiceId         String        @unique
+  invoice           Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  paymentMethod     PaymentMethod
+  paymentStatus     PaymentStatus @default(PENDING)
+  amount            Decimal       @db.Decimal(10, 2)
+  processedAt       DateTime?
+  refundedAt        DateTime?
+  refundReason      String?
+  refundedByAdminId String?
+  createdAt         DateTime      @default(now())
+
+  @@index([paymentStatus])
+  @@map("payment_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// REVIEWS & FEEDBACK CREDIT ENGINE
+// ---------------------------------------------------------------------------
+
+model Review {
+  id              String        @id @default(uuid())
+  bookingId       String        @unique
+  booking         Booking       @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  customerId      String
+  workerId        String
+  worker          WorkerProfile @relation("WorkerReviews", fields: [workerId], references: [id])
+  punctuality     Int // 1-5
+  quality         Int // 1-5
+  professionalism Int // 1-5
+  communication   Int // 1-5
+  overallScore    Float // average of the four dimensions, 1.00-5.00
+  writtenFeedback String?
+  createdAt       DateTime      @default(now())
+
+  @@index([workerId])
+  @@map("reviews")
+}
+
+model FeedbackCredit {
+  id                  String        @id @default(uuid())
+  workerProfileId     String        @unique
+  workerProfile       WorkerProfile @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+  commissionPoolTotal Decimal       @default(0) @db.Decimal(12, 2)
+  distributedTotal    Decimal       @default(0) @db.Decimal(12, 2)
+  updatedAt           DateTime      @updatedAt
+
+  @@map("feedback_credits")
+}
+
+model CreditTransaction {
+  id                    String                  @id @default(uuid())
+  workerProfileId       String
+  workerProfile         WorkerProfile           @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+  type                  CreditTransactionType
+  amount                Decimal                 @db.Decimal(10, 2)
+  status                CreditTransactionStatus @default(PROCESSING)
+  payoutMethod          PayoutMethod?
+  referenceBookingId    String?
+  /// links a REVERSAL/REFUND row back to the transaction it reverses — null for original entries
+  reversesTransactionId String?
+  /// client-supplied idempotency key echo (Section 8.4) — prevents duplicate ledger writes on request retry
+  idempotencyKey        String?                 @unique
+  createdAt             DateTime                @default(now())
+  settledAt             DateTime?
+
+  settlementRecord SettlementRecord?
+
+  @@index([workerProfileId])
+  @@index([status])
+  @@map("credit_transactions")
+}
+
+model SettlementRecord {
+  id                    String            @id @default(uuid())
+  creditTransactionId   String            @unique
+  creditTransaction     CreditTransaction @relation(fields: [creditTransactionId], references: [id], onDelete: Cascade)
+  payoutMethod          PayoutMethod
+  /// admin-entered manual reference (mock bank UTR, cash-pickup receipt number) — free text, never validated against a real bank API
+  externalReferenceNote String?
+  status                SettlementStatus  @default(PENDING)
+  recordedByAdminId     String
+  recordedAt            DateTime          @default(now())
+  reconciledByAdminId   String?
+  reconciledAt          DateTime?
+
+  @@index([status])
+  @@map("settlement_records")
+}
+
+model IncentiveProgress {
+  id              String          @id @default(uuid())
+  workerProfileId String
+  workerProfile   WorkerProfile   @relation(fields: [workerProfileId], references: [id], onDelete: Cascade)
+  title           String
+  reward          Decimal         @db.Decimal(10, 2)
+  reason          String
+  progress        Int             @default(0)
+  target          Int
+  expiry          DateTime
+  status          IncentiveStatus @default(PENDING)
+
+  @@index([workerProfileId])
+  @@map("incentive_progress")
+}
+
+// ---------------------------------------------------------------------------
+// PLATFORM OPERATIONS
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id        String               @id @default(uuid())
+  userId    String?
+  user      User?                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  audience  NotificationAudience @default(USER)
+  title     String
+  body      String
+  isRead    Boolean              @default(false)
+  /// Section 18.2 — stable idempotency-style key for system-generated
+  /// notifications (e.g. "booking:{id}:assigned"), so a retried dispatch
+  /// (server restart mid-fan-out) does not create a duplicate row for the
+  /// same event. Null for free-text admin broadcasts, which have no
+  /// natural dedupe key. Added in PHASE 10 — absent from the literal
+  /// Section 3 schema block, which predates Section 18.2's requirement.
+  dedupeKey String?
+  createdAt DateTime             @default(now())
+
+  @@unique([userId, dedupeKey])
+  @@index([userId])
+  @@index([audience])
+  /// covers "unread count" / "unread feed" queries (Section 18)
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model PlatformConfig {
+  id                 Int      @id @default(1)
+  commissionPercent  Decimal  @default(15.00) @db.Decimal(5, 2)
+  top3TimeoutSeconds Int      @default(45)
+  poolTimeoutSeconds Int      @default(120)
+  updatedAt          DateTime @updatedAt
+
+  @@map("platform_config")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id])
+  action     String
+  entityType String
+  entityId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([action])
+  @@map("audit_logs")
+}

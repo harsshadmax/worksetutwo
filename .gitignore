@@ -1,0 +1,34 @@
+# Environment secrets — never commit
+.env
+.env.local
+.env.*.local
+server/.env
+server/.env.local
+
+# Dependencies
+node_modules/
+server/node_modules/
+
+# Build output
+server/dist/
+dist/
+
+# Section 16 — private local-disk document storage stand-in (never public)
+server/storage-private/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Test coverage
+coverage/
+
+# Playwright E2E run output (screenshots, traces, HTML report)
+server/test-results/
+server/playwright-report/
