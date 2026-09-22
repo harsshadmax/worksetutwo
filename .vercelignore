@@ -1,0 +1,9 @@
+# Vercel hosts only the static frontend. Everything else stays off the
+# public deployment (backend source, internal docs, tooling).
+server
+.agents
+.claude
+*.md
+render.yaml
+skills-lock.json
+.env*
