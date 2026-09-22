@@ -1077,8 +1077,11 @@
                   </div>
                   <button 
                     type="submit"
-                    class="w-full py-3.5 bg-custom-primary text-white text-xs font-bold uppercase tracking-widest hover:bg-custom-dark transition duration-150 rounded-xl shadow-md hover:shadow-lg">
-                    {{ t('loginButton') }}
+                    :disabled="authBusy"
+                  :aria-busy="authBusy"
+                  class="w-full py-3.5 bg-custom-primary text-white text-xs font-bold uppercase tracking-widest hover:bg-custom-dark transition duration-150 rounded-xl shadow-md hover:shadow-lg flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-wait">
+                    <i v-if="authBusy" class="fa-solid fa-circle-notch fa-spin text-[11px]"></i>
+                    <span>{{ authBusy ? "Signing in…" : t('loginButton') }}</span>
                   </button>
                   
                   <!-- Quick Sign-in Helper -->
@@ -1089,12 +1092,14 @@
                     <button 
                       type="button"
                       @click="authEmail='anand@example.com'; authPassword='Customer@123'; handleLogin()"
+                      :disabled="authBusy"
                       class="w-full text-custom-main hover:text-custom-primary font-bold text-left block text-xs py-1.5 px-2.5 rounded-lg bg-custom-card border border-custom-border/60 hover:border-custom-primary/50 transition">
                       Anand Verma (Connaught Place, New Delhi) &rarr;
                     </button>
                     <button 
                       type="button"
                       @click="authEmail='deepika@example.com'; authPassword='Customer@123'; handleLogin()"
+                      :disabled="authBusy"
                       class="w-full text-custom-main hover:text-custom-primary font-bold text-left block text-xs py-1.5 px-2.5 rounded-lg bg-custom-card border border-custom-border/60 hover:border-custom-primary/50 transition">
                       Deepika Ramaswamy (Adyar, Chennai) &rarr;
                     </button>
@@ -2576,9 +2581,12 @@
                   </div>
                   <button 
                     type="submit"
-                    class="w-full py-3.5 bg-custom-primary hover:bg-custom-dark text-white text-xs font-bold uppercase-track rounded-xl shadow-sm transition flex items-center justify-center space-x-2">
-                    <span>{{ t('loginButton') }}</span>
-                    <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    :disabled="authBusy"
+                    :aria-busy="authBusy"
+                    class="w-full py-3.5 bg-custom-primary hover:bg-custom-dark text-white text-xs font-bold uppercase-track rounded-xl shadow-sm transition flex items-center justify-center space-x-2 disabled:opacity-70 disabled:cursor-wait">
+                    <i v-if="authBusy" class="fa-solid fa-circle-notch fa-spin text-[11px]"></i>
+                    <span>{{ authBusy ? "Signing in…" : t('loginButton') }}</span>
+                    <i v-if="!authBusy" class="fa-solid fa-arrow-right text-[10px]"></i>
                   </button>
 
                   <!-- Quick Sign-in Helper -->
@@ -2589,12 +2597,14 @@
                     <button 
                       type="button"
                       @click="authEmail='ravi.kumar@example.com'; authPassword='Worker@123'; handleLogin()"
+                      :disabled="authBusy"
                       class="text-custom-main hover:text-custom-primary font-bold text-left block transition py-1.5 px-2.5 rounded-lg bg-custom-card border border-custom-border/60 hover:border-custom-primary/50 w-full">
                       Ravi Kumar &bull; Plumber (Chennai Coop)
                     </button>
                     <button 
                       type="button"
                       @click="authEmail='priya.shanmugam@example.com'; authPassword='Worker@123'; handleLogin()"
+                      :disabled="authBusy"
                       class="text-custom-main hover:text-custom-primary font-bold text-left block transition py-1.5 px-2.5 rounded-lg bg-custom-card border border-custom-border/60 hover:border-custom-primary/50 w-full">
                       Priya Shanmugam &bull; Plumber (Chennai Coop)
                     </button>
@@ -3856,10 +3866,13 @@
                       class="w-full px-4 py-3 rounded-xl border border-custom-border bg-custom-bg text-custom-main text-xs font-semibold focus:outline-none focus:border-custom-primary focus:ring-2 focus:ring-custom-primary/20 transition">
                   </div>
                   <button 
-                    type="submit" 
-                    class="w-full py-3.5 bg-custom-primary hover:bg-custom-dark text-white text-xs font-bold uppercase-track rounded-xl shadow-sm transition flex items-center justify-center space-x-2">
-                    <span>{{ t('loginButton') }}</span>
-                    <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    type="submit"
+                    :disabled="authBusy"
+                    :aria-busy="authBusy"
+                    class="w-full py-3.5 bg-custom-primary hover:bg-custom-dark text-white text-xs font-bold uppercase-track rounded-xl shadow-sm transition flex items-center justify-center space-x-2 disabled:opacity-70 disabled:cursor-wait">
+                    <i v-if="authBusy" class="fa-solid fa-circle-notch fa-spin text-[11px]"></i>
+                    <span>{{ authBusy ? "Signing in…" : t('loginButton') }}</span>
+                    <i v-if="!authBusy" class="fa-solid fa-arrow-right text-[10px]"></i>
                   </button>
                   
                   <!-- Quick Login Credentials -->
@@ -3870,6 +3883,7 @@
                     <button 
                       type="button"
                       @click="authEmail='registrar@worksetu.coop'; authPassword='AdminPass@123'; handleLogin()"
+                      :disabled="authBusy"
                       class="text-custom-main hover:text-custom-primary font-bold text-left block transition py-1 px-2 rounded-lg bg-custom-card border border-custom-border/60 w-full">
                       Autofill Registrar Board Credentials
                     </button>

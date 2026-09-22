@@ -285,6 +285,12 @@ const app = createApp({
     const addDemoLog = (message) => demoLogs.value.unshift(`[${new Date().toLocaleTimeString()}] ${message}`);
     const resetMatchingTimer = () => {}; // no-op: real dispatch timing is server-enforced, not client-resettable
     const simulateCascadeNextStep = () => {}; // no-op: kept only so any leftover template reference doesn't error
+    // The redesign's "Interactive Demo" toolbar forced a simulated accept.
+    // Real assignment only happens when a worker accepts the offer, so these
+    // explain that instead of faking it.
+    const explainRealDispatch = () => showToast("Live dispatch", "Assignment happens when a matched worker accepts the offer from their dashboard.", "info", 3500);
+    const simulateWorkerAcceptancePathA = explainRealDispatch;
+    const simulatePoolWorkerAcceptance = explainRealDispatch;
     const isMatchingSearching = ref(false);
     const expandedWorkerId = ref(null);
     const selectedMatchingWorkerId = ref(null);
@@ -471,20 +477,36 @@ const app = createApp({
       workerIncoming.value = await api.request("GET", "/workers/me/incoming").catch(() => []);
     }
     // Real equivalent of the redesign's client-computed workerIncomingRequests.
+    // GET /workers/me/incoming returns { dispatchLogId, bookingId,
+    // serviceCategory, customerAreaLabel, distanceKm, estimatedTotal,
+    // offerExpiresAt } — mapped onto the field names the templates read.
     const workerIncomingRequests = computed(() =>
       workerIncoming.value.map((o) => ({
         id: o.dispatchLogId,
         bookingId: o.bookingId,
-        customerName: o.customerName,
-        service: getServiceName(o.serviceCategoryId),
-        location: o.location?.address,
-        description: o.description,
-        datetime: o.scheduledAt,
-        urgency: o.urgency,
+        serviceId: o.serviceCategory,
+        service: getServiceName(o.serviceCategory),
+        location: o.customerAreaLabel,
+        area: o.customerAreaLabel,
         estimatedPayment: o.estimatedTotal,
-        distance: o.distanceKm
+        estimatedEarnings: o.estimatedTotal,
+        distance: o.distanceKm != null ? Number(o.distanceKm).toFixed(1) : "—",
+        offerExpiresAt: o.offerExpiresAt
       }))
     );
+    // The worker "Available Requests" list renders `demoWorkerRequests`;
+    // it now shows the same real offers, with accept/decline going to
+    // POST /dispatch/:dispatchLogId/respond.
+    const demoWorkerRequests = computed(() =>
+      workerIncomingRequests.value.map((r) => ({
+        ...r,
+        skill: r.service,
+        time: r.offerExpiresAt ? `expires ${formatDate(r.offerExpiresAt)}` : "",
+        eta: r.distance !== "—" ? Math.max(5, Math.round(Number(r.distance) * 4)) : "—"
+      }))
+    );
+    const acceptDemoRequest = (req) => handleWorkerAccept(req.id);
+    const rejectDemoRequest = (dispatchLogId) => handleWorkerReject(dispatchLogId);
     async function loadWorkerBookings() {
       const res = await api.request("GET", "/workers/me/bookings").catch(() => null);
       if (res) {
@@ -828,8 +850,13 @@ const app = createApp({
     const filteredLiveWorkers = computed(() => adminLiveWorkersRaw.value);
     const selectedLiveWorker = computed(() => adminLiveWorkersRaw.value.find((w) => w.workerId === selectedWorkerId.value) || null);
     const liveStatsTotalWorkers = computed(() => adminLiveWorkersRaw.value.length);
-    const liveStatsAvailable = computed(() => adminLiveWorkersRaw.value.filter((w) => w.availabilityStatus === "AVAILABLE").length);
-    const liveStatsOnJob = computed(() => adminLiveWorkersRaw.value.filter((w) => w.currentBookingId).length);
+    // GET /admin/live/workers rows: { workerId, name, lat, lng, status, bookingId }
+    // where status is the WorkerAvailabilityStatus enum.
+    const liveStatsAvailable = computed(() => adminLiveWorkersRaw.value.filter((w) => w.status === "AVAILABLE").length);
+    const liveStatsOnJob = computed(() => adminLiveWorkersRaw.value.filter((w) => w.status === "ON_JOB").length);
+    const liveStatsTravelling = computed(() => adminLiveWorkersRaw.value.filter((w) => w.status === "TRAVELLING").length);
+    const liveStatsOffDuty = computed(() => adminLiveWorkersRaw.value.filter((w) => w.status === "OFF_DUTY").length);
+    const liveStatsActiveJobs = computed(() => adminLiveWorkersRaw.value.filter((w) => w.bookingId).length);
     const closeLiveWorkerDrawer = () => (selectedWorkerId.value = null);
     // Map pan/zoom is decorative canvas flavor with no real lat/lng->pixel
     // projection wired server-side; kept static rather than simulated.
@@ -1154,6 +1181,7 @@ const app = createApp({
     }
 
     const handleLogin = async () => {
+      if (authBusy.value) return;
       loginError.value = "";
       authBusy.value = true;
       try {
@@ -1163,10 +1191,13 @@ const app = createApp({
         startSession();
         await Promise.all([loadOwnProfile(res.role), services.value.length === 0 ? loadCatalog() : Promise.resolve()]);
         currentView.value = "dashboard";
-        await initializeRoleData(currentRole.value);
-        addDemoLog(`${currentRole.value} logged in.`);
         authEmail.value = "";
         authPassword.value = "";
+        addDemoLog(`${currentRole.value} logged in.`);
+        // Dashboard data (bookings, wallet, admin summary...) streams in after
+        // the view switches; awaiting it here kept the user on the login screen
+        // for several extra sequential round-trips.
+        initializeRoleData(currentRole.value).catch(() => {});
       } catch (err) {
         loginError.value = apiErrorMessage(err);
       } finally {
@@ -1175,6 +1206,7 @@ const app = createApp({
     };
 
     const handleRegister = async () => {
+      if (authBusy.value) return;
       registerError.value = "";
       authBusy.value = true;
       try {
@@ -1426,7 +1458,8 @@ const app = createApp({
       redemptionAmount, redemptionError, redemptionSuccess, redemptionHistory, payoutMethod, earningsTab, earningsFilterService, earningsFilterType, earningsFilterDate, showFilterDrawer,
       selectedOrder, selectedIncentive, workerDocuments, documentUploadError, documentUploadSuccess,
       toggleAvailability, handleWorkerAccept, handleWorkerReject, workerOnTheWay, workerStartJob, workerCompleteJob, handleRedeem, uploadDocument,
-      workerIncomingRequests, isWorkerAccepting, isWorkerDeclining,
+      workerIncomingRequests, isWorkerAccepting, isWorkerDeclining, demoWorkerRequests, acceptDemoRequest, rejectDemoRequest,
+      simulateWorkerAcceptancePathA, simulatePoolWorkerAcceptance, liveStatsTravelling, liveStatsOffDuty, liveStatsActiveJobs,
       notifications, adminNotifications, userNotifications, unreadUserNotificationsCount, markNotificationRead, markAllNotificationsRead, markAllUserNotificationsRead,
       isNotificationDropdownOpen, isProfileMenuOpen, toggleNotifications, toggleProfileMenu, closeHeaderDropdowns,
       adminTab, setAdminTab, adminIsSuper, adminDashboard: adminDashboardRaw, adminBookings: adminBookingsRaw, adminBookingsLedger, adminDispatchActive,
